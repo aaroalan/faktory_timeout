@@ -1,0 +1,117 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: faktory-config
+data:
+  faktory_password: "foobar"
+  faktory_url: "tcp://:foobar@faktory-server-svc:7419"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faktory-server
+  labels:
+    app: faktory-server
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: faktory-server
+  template:
+    metadata:
+      labels:
+        app: faktory-server
+    spec:
+      terminationGracePeriodSeconds: 20
+      containers:
+      - image: contribsys/faktory:1.5.2
+        name: faktory-server
+        command:
+        - "/faktory"
+        - "-b"
+        - ":7419"
+        - "-w"
+        - ":7420"
+        - "-e"
+        - production
+        env:
+          - name: FAKTORY_PASSWORD
+            valueFrom:
+              configMapKeyRef:
+                name: faktory-config
+                key: faktory_password
+          - name: FAKTORY_URL
+            valueFrom:
+              configMapKeyRef:
+                name: faktory-config
+                key: faktory_url
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: faktory-server-svc
+spec:
+  selector:
+    app: faktory-server
+  ports:
+  - name: faktory
+    protocol: TCP
+    port: 7419
+  - name: dashboard
+    protocol: TCP
+    port: 7420
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faktory-worker
+  labels:
+    app: faktory-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: faktory-worker
+  template:
+    metadata:
+      labels:
+        app: faktory-worker
+    spec:
+      initContainers:
+        - name: wait-for-faktory
+          image: busybox:1.28
+          command: ['sh', '-c', "until nslookup faktory-server-svc; do echo waiting for myservice; sleep 2; done"]
+      containers:
+        - name: app
+          image: worker-test-faktory
+          imagePullPolicy: Never
+          resources:
+            requests:
+              memory: 256Mi
+            limits:
+              memory: 256Mi
+          command: ["worker"]
+          env:
+          - name: FAKTORY_URL
+            valueFrom:
+              configMapKeyRef:
+                name: faktory-config
+                key: faktory_url
+          readinessProbe:
+            exec:
+             command:
+             - /bin/sh
+             - -c
+             - "ps -A | grep worker"
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+             command:
+             - /bin/sh
+             - -c
+             - "ps -A | grep worker"
+            initialDelaySeconds: 2
+            periodSeconds: 10
